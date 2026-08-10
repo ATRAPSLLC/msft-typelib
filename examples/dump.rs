@@ -128,9 +128,7 @@ fn dump_funcs(lib: &TypeLib<'_>, ti: &msft_typelib::TypeInfoEntry<'_>, show_disp
         };
 
         let mut suffix = String::new();
-        if show_dispid
-            && let Some(mid) = memid
-        {
+        if show_dispid && let Some(mid) = memid {
             suffix.push_str(&format!(" dispid={mid}"));
         }
         suffix.push_str(&format!(" vtable=0x{:04X}", func.vtable_offset()));
