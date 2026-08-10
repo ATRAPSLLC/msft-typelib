@@ -27,12 +27,7 @@ proptest! {
 /// Builds an MSFT file with a valid magic + header, a controlled number of
 /// TypeInfos (0..8), a segment directory filled from `seg_bytes`, and
 /// `payload` appended after the segment directory.
-fn build_msft_file(
-    nrtypeinfos: u8,
-    varflags: u16,
-    seg_bytes: &[u8],
-    payload: &[u8],
-) -> Vec<u8> {
+fn build_msft_file(nrtypeinfos: u8, varflags: u16, seg_bytes: &[u8], payload: &[u8]) -> Vec<u8> {
     let n = nrtypeinfos as usize;
     // Header: 0x54 bytes
     // Offset table: n * 4 bytes
@@ -148,8 +143,7 @@ fn build_msft_with_typeinfo_seg(nrtypeinfos: u8, typeinfo_payload: &[u8]) -> Vec
     // Segment 0 (TypeInfo): offset = data_start, length = typeinfo_payload.len()
     let seg0_off = segdir_start;
     buf[seg0_off..seg0_off + 4].copy_from_slice(&(data_start as i32).to_le_bytes());
-    buf[seg0_off + 4..seg0_off + 8]
-        .copy_from_slice(&(typeinfo_payload.len() as i32).to_le_bytes());
+    buf[seg0_off + 4..seg0_off + 8].copy_from_slice(&(typeinfo_payload.len() as i32).to_le_bytes());
 
     // Payload
     buf[data_start..].copy_from_slice(typeinfo_payload);
