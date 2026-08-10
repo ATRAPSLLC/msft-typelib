@@ -40,4 +40,5 @@ cargo run --example dump -- path/to/library.tlb
 
 ## License
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
+Copyright 2026 ATRAPS LLC. Licensed under the Apache License, Version 2.0.
+See [LICENSE](LICENSE) and [NOTICE](NOTICE) for details.

@@ -1,11 +1,10 @@
 [package]
 name = "msft-typelib"
-version = "0.1.0"
-authors = ["Johann Kempter <admin@binflip.rs>"]
+version = "0.1.1"
 edition = "2024"
 description = "Allocation-free parser for MSFT-format type library (.tlb) files"
 license = "Apache-2.0"
-repository = "https://github.com/BinFlip/msft-typelib/"
+repository = "https://github.com/ATRAPSLLC/msft-typelib"
 
 [[example]]
 name = "dump"
