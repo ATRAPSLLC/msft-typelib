@@ -9,7 +9,7 @@
 use crate::{
     ArrayDesc, ConstValue, CustDataEntry, CustDataIter, Error, FuncIter, FuncRecord, Guid,
     GuidEntryIter, ImpFile, ImpFileIter, ImpInfo, ImpInfoIter, ImplTypeIter, NameIter, ParamIter,
-    ParameterInfo, TypeInfoEntry, TypeInfoIter, VarIter,
+    ParameterInfo, TypeDescription, TypeInfoEntry, TypeInfoIter, VarIter,
     util::{
         read_f32_le, read_f64_le, read_i16_le, read_i32_le, read_i64_le, read_u16_le, read_u32_le,
         read_u64_le,
@@ -135,16 +135,26 @@ impl<'a> TypeLib<'a> {
             context: "cannot read nrtypeinfos",
         })? as usize;
 
-        // Layout: Header(0x54) + OffsetTable(n*4) + ExtraField(4) + SegDir(15*16)
-        // Note: Wine conditionally includes the ExtraField based on
-        // `varflags & HELPDLLFLAG (0x100)`, but empirical testing shows
-        // it is always present.  See `has_help_dll()` for the flag accessor.
-        let offset_table_start = Self::HEADER_SIZE;
+        // Layout: Header(0x54) + [ExtraField(4)] + OffsetTable(n*4) + SegDir(15*16).
+        // The ExtraField (the help-string DLL name's offset) follows the header
+        // and is present only when `varflags & HELPDLLFLAG (0x100)`, as Wine
+        // reads it (at `sizeof(MSFT_Header)`): the runtime's libraries set the
+        // flag (varflags 0x151), the libraries the VB6 compiler embeds in
+        // ActiveX binaries do not (0x41).
+        let varflags = read_u32_le(data, 0x14).ok_or(Error::InvalidData {
+            context: "cannot read varflags",
+        })?;
+        let extra_field = if varflags & 0x100 != 0 { 4 } else { 0 };
+        let offset_table_start =
+            Self::HEADER_SIZE
+                .checked_add(extra_field)
+                .ok_or(Error::InvalidData {
+                    context: "offset table overflow",
+                })?;
         let segdir_start = offset_table_start
             .checked_add(nrtypeinfos.checked_mul(4).ok_or(Error::InvalidData {
                 context: "typeinfo count overflow",
             })?)
-            .and_then(|v| v.checked_add(4))
             .ok_or(Error::InvalidData {
                 context: "segdir offset overflow",
             })?;
@@ -164,10 +174,13 @@ impl<'a> TypeLib<'a> {
 
         let mut seg_offsets = [(0i32, 0i32); NUM_SEGMENTS];
         for (i, entry) in seg_offsets.iter_mut().enumerate() {
-            let pos = segdir_start + i * Self::SEGDIR_ENTRY_SIZE;
+            let pos = i
+                .checked_mul(Self::SEGDIR_ENTRY_SIZE)
+                .and_then(|relative| segdir_start.checked_add(relative));
             *entry = (
-                read_i32_le(data, pos).unwrap_or(-1),
-                read_i32_le(data, pos + 4).unwrap_or(0),
+                pos.and_then(|pos| read_i32_le(data, pos)).unwrap_or(-1),
+                pos.and_then(|pos| read_i32_le(data, pos.checked_add(4)?))
+                    .unwrap_or(0),
             );
         }
 
@@ -363,6 +376,16 @@ impl<'a> TypeLib<'a> {
     /// Returns `None` if `offset` is negative, the segment is missing,
     /// the entry is out of bounds, or the bytes are not valid UTF-8.
     pub fn name(&self, offset: i32) -> Option<&'a str> {
+        std::str::from_utf8(self.name_bytes(offset)?).ok()
+    }
+
+    /// Looks up a name's bytes by byte offset into the name table segment,
+    /// whatever their encoding: a library stores its names in the ANSI code
+    /// page it was built in, which only the caller can know.
+    ///
+    /// Returns `None` if `offset` is negative, the segment is missing, or
+    /// the entry is out of bounds.
+    pub fn name_bytes(&self, offset: i32) -> Option<&'a [u8]> {
         if offset < 0 {
             return None;
         }
@@ -372,7 +395,7 @@ impl<'a> TypeLib<'a> {
         let namelen = *self.data.get(abs.checked_add(8)?)? as usize;
         let name_start = abs.checked_add(12)?;
         let name_end = name_start.checked_add(namelen)?;
-        std::str::from_utf8(self.data.get(name_start..name_end)?).ok()
+        self.data.get(name_start..name_end)
     }
 
     /// Looks up a GUID by byte offset into the GUID table segment.
@@ -467,12 +490,12 @@ impl<'a> TypeLib<'a> {
                 count: self.nrtypeinfos,
             });
         }
-        let offset_pos =
-            self.offset_table_start
-                .checked_add(index * 4)
-                .ok_or(Error::InvalidData {
-                    context: "offset table position overflow",
-                })?;
+        let offset_pos = index
+            .checked_mul(4)
+            .and_then(|relative| self.offset_table_start.checked_add(relative))
+            .ok_or(Error::InvalidData {
+                context: "offset table position overflow",
+            })?;
         let ti_offset = read_i32_le(self.data, offset_pos).ok_or(Error::InvalidData {
             context: "cannot read typeinfo offset",
         })?;
@@ -490,16 +513,15 @@ impl<'a> TypeLib<'a> {
             .ok_or(Error::InvalidData {
                 context: "typeinfo absolute offset overflow",
             })?;
-        if abs + TypeInfoEntry::SIZE > self.data.len() {
-            return Err(Error::TooShort {
+        let bytes = abs
+            .checked_add(TypeInfoEntry::SIZE)
+            .and_then(|end| self.data.get(abs..end))
+            .ok_or(Error::TooShort {
                 expected: TypeInfoEntry::SIZE,
                 actual: self.data.len().saturating_sub(abs),
                 context: "TypeInfoBase",
-            });
-        }
-        Ok(TypeInfoEntry::new(
-            &self.data[abs..abs + TypeInfoEntry::SIZE],
-        ))
+            })?;
+        Ok(TypeInfoEntry::new(bytes))
     }
 
     /// Returns an iterator over all TypeInfo entries.
@@ -595,7 +617,11 @@ impl<'a> TypeLib<'a> {
         if params_size > record_len {
             return ParamIter::new(&[], 0, 0);
         }
-        ParamIter::new(func.as_bytes(), record_len - params_size, nrargs)
+        ParamIter::new(
+            func.as_bytes(),
+            record_len.saturating_sub(params_size),
+            nrargs,
+        )
     }
 
     /// Computes the file offset where auxiliary arrays begin for a TypeInfo.
@@ -661,11 +687,20 @@ impl<'a> TypeLib<'a> {
     /// Returns `None` if the TypeInfo has no data block, `index` is out of
     /// bounds, or the name-table offset is invalid.
     pub fn func_name(&self, ti: &TypeInfoEntry<'_>, index: usize) -> Option<&'a str> {
+        self.name(self.func_name_offset(ti, index)?)
+    }
+
+    /// Returns the name-table offset of `function[index]`'s name, -1 when it
+    /// has none of its own (the second accessor of a property may share the
+    /// first's), for [`name`](Self::name) or [`name_bytes`](Self::name_bytes).
+    ///
+    /// Returns `None` if the TypeInfo has no data block or `index` is out of
+    /// bounds.
+    pub fn func_name_offset(&self, ti: &TypeInfoEntry<'_>, index: usize) -> Option<i32> {
         let fc = ti.func_count() as usize;
         let vc = ti.var_count() as usize;
         let array_idx = fc.checked_add(vc)?.checked_add(index)?;
-        let name_offset = self.read_aux_i32(ti, array_idx)?;
-        self.name(name_offset)
+        self.read_aux_i32(ti, array_idx)
     }
 
     /// Returns the name of `variable[index]` from the auxiliary name array.
@@ -673,11 +708,19 @@ impl<'a> TypeLib<'a> {
     /// Returns `None` if the TypeInfo has no data block, `index` is out of
     /// bounds, or the name-table offset is invalid.
     pub fn var_name(&self, ti: &TypeInfoEntry<'_>, index: usize) -> Option<&'a str> {
+        self.name(self.var_name_offset(ti, index)?)
+    }
+
+    /// Returns the name-table offset of `variable[index]`'s name, for
+    /// [`name`](Self::name) or [`name_bytes`](Self::name_bytes).
+    ///
+    /// Returns `None` if the TypeInfo has no data block or `index` is out of
+    /// bounds.
+    pub fn var_name_offset(&self, ti: &TypeInfoEntry<'_>, index: usize) -> Option<i32> {
         let fc = ti.func_count() as usize;
         let vc = ti.var_count() as usize;
         let array_idx = fc.checked_mul(2)?.checked_add(vc)?.checked_add(index)?;
-        let name_offset = self.read_aux_i32(ti, array_idx)?;
-        self.name(name_offset)
+        self.read_aux_i32(ti, array_idx)
     }
 
     /// Decodes a constant value from an `OffsValue` field.
@@ -717,17 +760,21 @@ impl<'a> TypeLib<'a> {
         let (seg_offset, _) = self.segment(SEG_CUSTDATA)?;
         let abs = seg_offset.checked_add(offs_value as usize)?;
         let vt = read_u16_le(self.data, abs)?;
+        let value = abs.checked_add(2)?;
         Some(match vt {
             0 => ConstValue::Empty,
             1 => ConstValue::Null,
-            2 => ConstValue::I2(read_i32_le(self.data, abs + 2)? as i16),
-            3 => ConstValue::I4(read_i32_le(self.data, abs + 2)?),
-            4 => ConstValue::R4(read_f32_le(self.data, abs + 2)?),
-            5 => ConstValue::R8(read_f64_le(self.data, abs + 2)?),
-            6 => ConstValue::Cy(read_i64_le(self.data, abs + 2)?),
-            7 => ConstValue::Date(read_f64_le(self.data, abs + 2)?),
+            2 => ConstValue::I2(read_i32_le(self.data, value)? as i16),
+            3 => ConstValue::I4(read_i32_le(self.data, value)?),
+            4 => ConstValue::R4(read_f32_le(self.data, value)?),
+            5 => ConstValue::R8(read_f64_le(self.data, value)?),
+            6 => ConstValue::Cy(read_i64_le(self.data, value)?),
+            7 => ConstValue::Date(read_f64_le(self.data, value)?),
             8 => {
-                let len_raw = read_i32_le(self.data, abs + 2)?;
+                let len_raw = read_i32_le(self.data, value)?;
+                if len_raw == -1 {
+                    return Some(ConstValue::NullBstr);
+                }
                 if len_raw < 0 {
                     return None;
                 }
@@ -736,27 +783,27 @@ impl<'a> TypeLib<'a> {
                 let end = start.checked_add(len)?;
                 ConstValue::Bstr(self.data.get(start..end)?)
             }
-            10 => ConstValue::Error(read_i32_le(self.data, abs + 2)?),
-            11 => ConstValue::Bool(read_i16_le(self.data, abs + 2)? != 0),
+            10 => ConstValue::Error(read_i32_le(self.data, value)?),
+            11 => ConstValue::Bool(read_i16_le(self.data, value)? != 0),
             14 => {
                 let start = abs.checked_add(2)?;
                 let end = start.checked_add(16)?;
                 ConstValue::Decimal(self.data.get(start..end)?)
             }
-            16 => ConstValue::I1(read_i32_le(self.data, abs + 2)? as i8),
-            17 => ConstValue::UI1(read_i32_le(self.data, abs + 2)? as u8),
-            18 => ConstValue::UI2(read_i32_le(self.data, abs + 2)? as u16),
-            19 => ConstValue::UI4(read_u32_le(self.data, abs + 2)?),
-            20 => ConstValue::I8(read_i64_le(self.data, abs + 2)?),
-            21 => ConstValue::UI8(read_u64_le(self.data, abs + 2)?),
-            22 => ConstValue::Int(read_i32_le(self.data, abs + 2)?),
-            23 => ConstValue::UInt(read_u32_le(self.data, abs + 2)?),
+            16 => ConstValue::I1(read_i32_le(self.data, value)? as i8),
+            17 => ConstValue::UI1(read_i32_le(self.data, value)? as u8),
+            18 => ConstValue::UI2(read_i32_le(self.data, value)? as u16),
+            19 => ConstValue::UI4(read_u32_le(self.data, value)?),
+            20 => ConstValue::I8(read_i64_le(self.data, value)?),
+            21 => ConstValue::UI8(read_u64_le(self.data, value)?),
+            22 => ConstValue::Int(read_i32_le(self.data, value)?),
+            23 => ConstValue::UInt(read_u32_le(self.data, value)?),
             24 => ConstValue::Void,
-            25 => ConstValue::Hresult(read_i32_le(self.data, abs + 2)?),
-            64 => ConstValue::Filetime(read_u64_le(self.data, abs + 2)?),
+            25 => ConstValue::Hresult(read_i32_le(self.data, value)?),
+            64 => ConstValue::Filetime(read_u64_le(self.data, value)?),
             _ => ConstValue::Raw {
                 vt,
-                bits: read_i32_le(self.data, abs + 2)?,
+                bits: read_i32_le(self.data, value)?,
             },
         })
     }
@@ -778,7 +825,7 @@ impl<'a> TypeLib<'a> {
         let abs = seg_offset.checked_add(offset as usize)?;
         Some((
             read_i32_le(self.data, abs)?,
-            read_i32_le(self.data, abs + 4)?,
+            read_i32_le(self.data, abs.checked_add(4)?)?,
         ))
     }
 
@@ -792,7 +839,7 @@ impl<'a> TypeLib<'a> {
     /// is out of range. For full resolution including external and
     /// dispatch references, use [`resolve_hreftype_full`](Self::resolve_hreftype_full).
     pub fn resolve_hreftype(&self, hreftype: i32) -> Option<usize> {
-        if hreftype < 0 {
+        if hreftype < 0 || hreftype & 0x03 != 0 {
             return None;
         }
         let index = hreftype as usize / TypeInfoEntry::SIZE;
@@ -820,20 +867,21 @@ impl<'a> TypeLib<'a> {
             hreftype
         };
 
-        // Try internal first
-        let index = effective as usize / TypeInfoEntry::SIZE;
-        if index < self.nrtypeinfos {
-            return Some(ResolvedHreftype::Internal(index));
+        // A reference into this library has its low two bits clear: it is the
+        // byte offset of a TypeInfo. Any other is an import.
+        if effective & 0x03 == 0 {
+            let index = effective as usize / TypeInfoEntry::SIZE;
+            return (index < self.nrtypeinfos).then_some(ResolvedHreftype::Internal(index));
         }
 
         // External: hreftype (with low 2 bits masked) is a byte offset into ImpInfo segment
         let imp_byte_offset = (effective & !0x03) as usize;
         let (seg_offset, seg_len) = self.segment(SEG_IMPINFO)?;
-        if imp_byte_offset + ImpInfo::SIZE > seg_len {
+        if imp_byte_offset.checked_add(ImpInfo::SIZE)? > seg_len {
             return None;
         }
-        let abs = seg_offset + imp_byte_offset;
-        let imp_info = ImpInfo::new(&self.data[abs..abs + ImpInfo::SIZE]);
+        let abs = seg_offset.checked_add(imp_byte_offset)?;
+        let imp_info = ImpInfo::new(self.data.get(abs..abs.checked_add(ImpInfo::SIZE)?)?);
         let imp_file = self.imp_file(imp_info.imp_file_offset());
         Some(ResolvedHreftype::External { imp_info, imp_file })
     }
@@ -853,9 +901,9 @@ impl<'a> TypeLib<'a> {
     /// Returns an iterator over implemented interfaces for a coclass.
     ///
     /// Traverses the linked list in the reference table starting from
-    /// the TypeInfo's `res2` field.
+    /// the TypeInfo's `datatype1` field.
     pub fn impl_types(&self, ti: &TypeInfoEntry<'_>) -> ImplTypeIter<'a> {
-        let ref_offset = ti.res2();
+        let ref_offset = ti.datatype1();
         let (seg_offset, _) = self.segment(SEG_REFTAB).unwrap_or((0, 0));
         ImplTypeIter::new(self.data, seg_offset, ref_offset)
     }
@@ -889,14 +937,30 @@ impl<'a> TypeLib<'a> {
         if abs.checked_add(ImpFile::HEADER_SIZE)? > seg_offset.checked_add(seg_len)? {
             return None;
         }
-        let size_field = read_u16_le(self.data, abs + 0x0C)?;
+        let size_field = read_u16_le(self.data, abs.checked_add(0x0C)?)?;
         let name_len = (size_field >> 2) as usize;
-        let entry_size = (ImpFile::HEADER_SIZE + name_len + 3) & !3;
+        let entry_size = ImpFile::HEADER_SIZE.checked_add(name_len)?.checked_add(3)? & !3;
         let end = abs.checked_add(entry_size)?;
-        if end > self.data.len() {
-            return None;
+        Some(ImpFile::new(self.data.get(abs..end)?))
+    }
+
+    /// Decodes the type field `datatype` one level ([`TypeDescription`]).
+    ///
+    /// Returns `None` when a non-negative `datatype` names no entry of the
+    /// type-descriptor table, or a `VT_CARRAY` entry names no array
+    /// descriptor.
+    pub fn type_description(&self, datatype: i32) -> Option<TypeDescription<'a>> {
+        if datatype < 0 {
+            return Some(TypeDescription::Base((datatype as u32 & 0x0FFF) as u16));
         }
-        Some(ImpFile::new(&self.data[abs..end]))
+        let (first, second) = self.type_desc(datatype)?;
+        Some(match (first as u32 & 0x0FFF) as u16 {
+            26 => TypeDescription::Pointer(second),
+            27 => TypeDescription::SafeArray(second),
+            28 => TypeDescription::CArray(self.array_desc(second & 0xFFFF)?),
+            29 => TypeDescription::UserDefined(second),
+            other => TypeDescription::Base(other),
+        })
     }
 
     /// Returns an array descriptor at the given byte offset in segment 10.
@@ -913,13 +977,10 @@ impl<'a> TypeLib<'a> {
         if abs.checked_add(8)? > self.data.len() {
             return None;
         }
-        let num_dims = read_u16_le(self.data, abs + 4)? as usize;
-        let size = 8 + num_dims * 8;
+        let num_dims = read_u16_le(self.data, abs.checked_add(4)?)? as usize;
+        let size = num_dims.checked_mul(8)?.checked_add(8)?;
         let end = abs.checked_add(size)?;
-        if end > self.data.len() {
-            return None;
-        }
-        Some(ArrayDesc::new(&self.data[abs..end]))
+        Some(ArrayDesc::new(self.data.get(abs..end)?))
     }
 
     /// Returns an iterator over the custom data chain starting at `offset`

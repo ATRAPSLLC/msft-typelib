@@ -68,19 +68,22 @@ impl<'a> ImpFile<'a> {
         read_u16_le(self.bytes, 0x0C).unwrap_or(0)
     }
 
-    /// The filename of the imported library.
+    /// The filename of the imported library, when it is UTF-8.
     pub fn filename(&self) -> Option<&'a str> {
+        std::str::from_utf8(self.filename_bytes()?).ok()
+    }
+
+    /// The filename's bytes, in the code page the library was built in.
+    pub fn filename_bytes(&self) -> Option<&'a [u8]> {
         let name_len = (self.size_field() >> 2) as usize;
-        let name_bytes = self
-            .bytes
-            .get(Self::HEADER_SIZE..Self::HEADER_SIZE + name_len)?;
-        std::str::from_utf8(name_bytes).ok()
+        self.bytes
+            .get(Self::HEADER_SIZE..Self::HEADER_SIZE.checked_add(name_len)?)
     }
 
     /// Total size of this entry in bytes (header + name, padded to 4-byte alignment).
     pub fn entry_size(&self) -> usize {
         let name_len = (self.size_field() >> 2) as usize;
-        let unpadded = Self::HEADER_SIZE + name_len;
-        (unpadded + 3) & !3
+        let unpadded = Self::HEADER_SIZE.saturating_add(name_len);
+        unpadded.saturating_add(3) & !3
     }
 }

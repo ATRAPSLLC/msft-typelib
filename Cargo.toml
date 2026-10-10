@@ -1,6 +1,6 @@
 [package]
 name = "msft-typelib"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 description = "Allocation-free parser for MSFT-format type library (.tlb) files"
 license = "Apache-2.0"
@@ -9,6 +9,17 @@ repository = "https://github.com/ATRAPSLLC/msft-typelib"
 [[example]]
 name = "dump"
 path = "examples/dump.rs"
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+arithmetic_side_effects = "deny"
+indexing_slicing = "deny"
 
 [dev-dependencies]
 proptest = "1.11.0"

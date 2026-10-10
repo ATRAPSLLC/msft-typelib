@@ -27,10 +27,11 @@
 //! An MSFT file begins with a 0x54-byte header (magic `"MSFT"`, version,
 //! GUID offset, LCID, flags, etc.), followed by:
 //!
-//! 1. **Offset table** -- one `i32` per TypeInfo, giving its byte offset
+//! 1. **Extra field** (4 bytes) -- the help-string DLL name's offset when the
+//!    `HELPDLLFLAG` is set: present in the VB6 runtime's libraries, absent
+//!    from the libraries the VB6 compiler embeds in ActiveX binaries.
+//! 2. **Offset table** -- one `i32` per TypeInfo, giving its byte offset
 //!    inside the TypeInfo segment.
-//! 2. **Extra field** (4 bytes) -- help-string-DLL offset when the
-//!    `HELPDLLFLAG` is set; empirically always present.
 //! 3. **Segment directory** -- 15 entries of 16 bytes each
 //!    (`offset: i32, length: i32, res08, res0c`), pointing to the data
 //!    segments that follow.
@@ -80,8 +81,6 @@
 //! | [`NameEntry`] | A decoded entry from the name table |
 //! | [`Error`] | Parse error type |
 
-#![deny(missing_docs, unsafe_code)]
-
 mod arraydesc;
 mod custdata;
 mod error;
@@ -117,7 +116,7 @@ pub use param::ParameterInfo;
 pub use refrecord::RefRecord;
 pub use typeinfo::TypeInfoEntry;
 pub use typelib::{ResolvedHreftype, TypeLib};
-pub use types::{ConstValue, TypeKind, vt_name};
+pub use types::{ConstValue, TypeDescription, TypeKind, vt_name};
 pub use var::VarRecord;
 
 #[cfg(test)]

@@ -16,6 +16,7 @@ use crate::util::{read_i32_le, read_u16_le, read_u32_le};
 ///
 /// Describes a fixed-size array: its element type, number of dimensions,
 /// and bounds for each dimension.
+#[derive(Clone, Copy, Debug)]
 pub struct ArrayDesc<'a> {
     bytes: &'a [u8],
 }
@@ -55,9 +56,9 @@ impl<'a> ArrayDesc<'a> {
         if index >= self.num_dims() as usize {
             return None;
         }
-        let base = 0x08 + index * 8;
+        let base = index.checked_mul(8)?.checked_add(0x08)?;
         let c_elements = read_u32_le(self.bytes, base)?;
-        let l_lbound = read_i32_le(self.bytes, base + 4)?;
+        let l_lbound = read_i32_le(self.bytes, base.checked_add(4)?)?;
         Some(SafeArrayBound {
             c_elements,
             l_lbound,
@@ -67,7 +68,9 @@ impl<'a> ArrayDesc<'a> {
     /// Total size of this descriptor in bytes.
     #[inline]
     pub fn size(&self) -> usize {
-        0x08 + (self.num_dims() as usize) * 8
+        (self.num_dims() as usize)
+            .saturating_mul(8)
+            .saturating_add(0x08)
     }
 }
 

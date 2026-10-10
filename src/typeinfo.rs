@@ -59,7 +59,8 @@ impl<'a> TypeInfoEntry<'a> {
         read_i32_le(self.bytes, 0x04).unwrap_or(-1)
     }
 
-    /// First reference offset in `pRefTab` (for coclasses), or `-1`.
+    /// Reserved field at offset 0x08 (0 for every coclass of the samples;
+    /// the first reference is at [`datatype1`](Self::datatype1)).
     #[inline]
     pub fn res2(&self) -> i32 {
         read_i32_le(self.bytes, 0x08).unwrap_or(-1)
@@ -133,7 +134,9 @@ impl<'a> TypeInfoEntry<'a> {
         read_i32_le(self.bytes, 0x50).unwrap_or(0)
     }
 
-    /// For `ALIAS` types: the aliased type descriptor. Otherwise `-1`.
+    /// For `COCLASS` types: the offset in the reference table of the first
+    /// implemented interface. For `ALIAS` types: the aliased type
+    /// descriptor. Otherwise `-1`.
     #[inline]
     pub fn datatype1(&self) -> i32 {
         read_i32_le(self.bytes, 0x54).unwrap_or(-1)

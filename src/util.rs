@@ -11,7 +11,7 @@
 /// Returns `None` if `offset + 2 > data.len()`.
 #[inline(always)]
 pub(crate) fn read_u16_le(data: &[u8], offset: usize) -> Option<u16> {
-    let bytes: &[u8; 2] = data.get(offset..offset + 2)?.try_into().ok()?;
+    let bytes: &[u8; 2] = data.get(offset..offset.checked_add(2)?)?.try_into().ok()?;
     Some(u16::from_le_bytes(*bytes))
 }
 
@@ -20,7 +20,7 @@ pub(crate) fn read_u16_le(data: &[u8], offset: usize) -> Option<u16> {
 /// Returns `None` if `offset + 4 > data.len()`.
 #[inline(always)]
 pub(crate) fn read_u32_le(data: &[u8], offset: usize) -> Option<u32> {
-    let bytes: &[u8; 4] = data.get(offset..offset + 4)?.try_into().ok()?;
+    let bytes: &[u8; 4] = data.get(offset..offset.checked_add(4)?)?.try_into().ok()?;
     Some(u32::from_le_bytes(*bytes))
 }
 
@@ -29,7 +29,7 @@ pub(crate) fn read_u32_le(data: &[u8], offset: usize) -> Option<u32> {
 /// Returns `None` if `offset + 2 > data.len()`.
 #[inline(always)]
 pub(crate) fn read_i16_le(data: &[u8], offset: usize) -> Option<i16> {
-    let bytes: &[u8; 2] = data.get(offset..offset + 2)?.try_into().ok()?;
+    let bytes: &[u8; 2] = data.get(offset..offset.checked_add(2)?)?.try_into().ok()?;
     Some(i16::from_le_bytes(*bytes))
 }
 
@@ -38,7 +38,7 @@ pub(crate) fn read_i16_le(data: &[u8], offset: usize) -> Option<i16> {
 /// Returns `None` if `offset + 4 > data.len()`.
 #[inline(always)]
 pub(crate) fn read_i32_le(data: &[u8], offset: usize) -> Option<i32> {
-    let bytes: &[u8; 4] = data.get(offset..offset + 4)?.try_into().ok()?;
+    let bytes: &[u8; 4] = data.get(offset..offset.checked_add(4)?)?.try_into().ok()?;
     Some(i32::from_le_bytes(*bytes))
 }
 
@@ -47,7 +47,7 @@ pub(crate) fn read_i32_le(data: &[u8], offset: usize) -> Option<i32> {
 /// Returns `None` if `offset + 8 > data.len()`.
 #[inline(always)]
 pub(crate) fn read_u64_le(data: &[u8], offset: usize) -> Option<u64> {
-    let bytes: &[u8; 8] = data.get(offset..offset + 8)?.try_into().ok()?;
+    let bytes: &[u8; 8] = data.get(offset..offset.checked_add(8)?)?.try_into().ok()?;
     Some(u64::from_le_bytes(*bytes))
 }
 
@@ -56,7 +56,7 @@ pub(crate) fn read_u64_le(data: &[u8], offset: usize) -> Option<u64> {
 /// Returns `None` if `offset + 8 > data.len()`.
 #[inline(always)]
 pub(crate) fn read_i64_le(data: &[u8], offset: usize) -> Option<i64> {
-    let bytes: &[u8; 8] = data.get(offset..offset + 8)?.try_into().ok()?;
+    let bytes: &[u8; 8] = data.get(offset..offset.checked_add(8)?)?.try_into().ok()?;
     Some(i64::from_le_bytes(*bytes))
 }
 
@@ -65,7 +65,7 @@ pub(crate) fn read_i64_le(data: &[u8], offset: usize) -> Option<i64> {
 /// Returns `None` if `offset + 4 > data.len()`.
 #[inline(always)]
 pub(crate) fn read_f32_le(data: &[u8], offset: usize) -> Option<f32> {
-    let bytes: &[u8; 4] = data.get(offset..offset + 4)?.try_into().ok()?;
+    let bytes: &[u8; 4] = data.get(offset..offset.checked_add(4)?)?.try_into().ok()?;
     Some(f32::from_le_bytes(*bytes))
 }
 
@@ -74,7 +74,7 @@ pub(crate) fn read_f32_le(data: &[u8], offset: usize) -> Option<f32> {
 /// Returns `None` if `offset + 8 > data.len()`.
 #[inline(always)]
 pub(crate) fn read_f64_le(data: &[u8], offset: usize) -> Option<f64> {
-    let bytes: &[u8; 8] = data.get(offset..offset + 8)?.try_into().ok()?;
+    let bytes: &[u8; 8] = data.get(offset..offset.checked_add(8)?)?.try_into().ok()?;
     Some(f64::from_le_bytes(*bytes))
 }
 

@@ -5,6 +5,14 @@
 //! integration tests (which exercise real `.tlb` files) by exploring
 //! edge cases that real files never contain.
 
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing
+)]
+
 use msft_typelib::TypeLib;
 use proptest::prelude::*;
 

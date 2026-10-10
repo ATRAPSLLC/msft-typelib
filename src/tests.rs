@@ -1,3 +1,13 @@
+//! Unit tests over the sample libraries in `tests/samples/`.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing
+)]
+
 use crate::*;
 
 fn load_vbvm60() -> Vec<u8> {
@@ -59,7 +69,7 @@ fn guid_table_iteration() {
 fn vbvartype_enum_members() {
     let data = load_vbvm60();
     let lib = TypeLib::parse(&data).unwrap();
-    let ti = lib.typeinfo(1).unwrap();
+    let ti = lib.typeinfo(0).unwrap();
     assert_eq!(ti.typekind(), TypeKind::Enum);
     assert_eq!(lib.name(ti.name_offset()), Some("VbVarType"));
     assert_eq!(ti.var_count(), 18);
@@ -89,7 +99,7 @@ fn vbvartype_enum_members() {
 fn vbtristate_negative_values() {
     let data = load_vbvm60();
     let lib = TypeLib::parse(&data).unwrap();
-    let ti = lib.typeinfo(13).unwrap();
+    let ti = lib.typeinfo(12).unwrap();
     assert_eq!(lib.name(ti.name_offset()), Some("VbTriState"));
     let vars: Vec<_> = lib.vars(&ti).collect();
     assert_eq!(vars.len(), 3);
@@ -111,7 +121,7 @@ fn vbtristate_negative_values() {
 fn errobject_dispatch_funcs() {
     let data = load_vbvm60();
     let lib = TypeLib::parse(&data).unwrap();
-    let ti = lib.typeinfo(26).unwrap();
+    let ti = lib.typeinfo(25).unwrap();
     assert_eq!(ti.typekind(), TypeKind::Dispatch);
     assert_eq!(lib.name(ti.name_offset()), Some("_ErrObject"));
     assert_eq!(ti.func_count(), 13);
@@ -126,7 +136,7 @@ fn errobject_dispatch_funcs() {
 fn collection_dispids() {
     let data = load_vbvm60();
     let lib = TypeLib::parse(&data).unwrap();
-    let ti = lib.typeinfo(28).unwrap();
+    let ti = lib.typeinfo(27).unwrap();
     assert_eq!(lib.name(ti.name_offset()), Some("_Collection"));
     assert_eq!(lib.func_memid(&ti, 4), Some(-4));
 }
@@ -135,7 +145,7 @@ fn collection_dispids() {
 fn constants_module_string_values() {
     let data = load_vbvm60();
     let lib = TypeLib::parse(&data).unwrap();
-    let ti = lib.typeinfo(15).unwrap();
+    let ti = lib.typeinfo(14).unwrap();
     assert_eq!(ti.typekind(), TypeKind::Module);
     assert_eq!(lib.name(ti.name_offset()), Some("Constants"));
     assert_eq!(ti.var_count(), 11);
@@ -212,4 +222,33 @@ fn controls_has_coclass_typeinfos() {
 fn var_record_from_raw_too_short() {
     let data = [0u8; 4];
     assert!(VarRecord::from_raw(&data).is_err());
+}
+
+/// Every variant states the `VARTYPE` it decodes.
+#[test]
+fn const_values_state_their_vartype() {
+    assert_eq!(ConstValue::I4(0).vt(), 3);
+    assert_eq!(ConstValue::Bstr(&[]).vt(), 8);
+    assert_eq!(ConstValue::Bool(true).vt(), 11);
+    assert_eq!(ConstValue::Filetime(0).vt(), 64);
+    assert_eq!(ConstValue::Raw { vt: 13, bits: 0 }.vt(), 13);
+}
+
+/// A string constant stored with length -1 is a null BSTR, not a malformed
+/// one: VBA's `vbNullString`, in the `Constants` module.
+#[test]
+fn a_null_string_constant_decodes() {
+    let data = load_vbvm60();
+    let lib = TypeLib::parse(&data).unwrap();
+    let ti = lib.typeinfo(14).unwrap();
+    assert_eq!(lib.name(ti.name_offset()), Some("Constants"));
+    let index = (0..usize::from(ti.var_count()))
+        .find(|&index| lib.var_name(&ti, index) == Some("vbNullString"))
+        .expect("Constants declares vbNullString");
+    let var = lib.vars(&ti).nth(index).unwrap();
+    assert!(matches!(
+        lib.const_value(var.offs_value()),
+        Some(ConstValue::NullBstr)
+    ));
+    assert_eq!(ConstValue::NullBstr.vt(), 8);
 }
