@@ -20,9 +20,12 @@ jobs:
       id-token: write        # required to mint the crates.io OIDC token
 
     steps:
+      # Fully qualified so a branch that shares the tag's name (a release PR
+      # branch named v1.2.3, say) cannot shadow the tag: checkout resolves a
+      # bare name to a branch first.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: refs/tags/${{ github.event.release.tag_name }}
           fetch-depth: 0     # merge-base needs real history
 
       # Hold the tag against Cargo.toml, so a mistyped tag fails here rather
