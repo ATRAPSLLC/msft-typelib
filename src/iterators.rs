@@ -34,12 +34,12 @@ impl<'a> Iterator for TypeInfoIter<'a> {
             return None;
         }
         let result = self.lib.typeinfo(self.index);
-        self.index += 1;
+        self.index = self.index.saturating_add(1);
         Some(result)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let rem = self.lib.typeinfo_count() - self.index;
+        let rem = self.lib.typeinfo_count().saturating_sub(self.index);
         (rem, Some(rem))
     }
 }
@@ -80,9 +80,9 @@ impl<'a> Iterator for FuncIter<'a> {
         if end > self.data.len() {
             return None;
         }
-        let record = FuncRecord::new(&self.data[self.pos..end]);
+        let record = FuncRecord::new(self.data.get(self.pos..end)?);
         self.pos = end;
-        self.remaining -= 1;
+        self.remaining = self.remaining.saturating_sub(1);
         Some(record)
     }
 
@@ -127,9 +127,9 @@ impl<'a> Iterator for VarIter<'a> {
         if end > self.data.len() {
             return None;
         }
-        let record = VarRecord::new(&self.data[self.pos..end]);
+        let record = VarRecord::new(self.data.get(self.pos..end)?);
         self.pos = end;
-        self.remaining -= 1;
+        self.remaining = self.remaining.saturating_sub(1);
         Some(record)
     }
 
@@ -167,9 +167,9 @@ impl<'a> Iterator for ParamIter<'a> {
         if end > self.data.len() {
             return None;
         }
-        let param = ParameterInfo::new(&self.data[self.pos..end]);
+        let param = ParameterInfo::new(self.data.get(self.pos..end)?);
         self.pos = end;
-        self.remaining -= 1;
+        self.remaining = self.remaining.saturating_sub(1);
         Some(param)
     }
 
@@ -202,7 +202,7 @@ impl<'a> Iterator for GuidEntryIter<'a> {
         if end > self.end || end > self.data.len() {
             return None;
         }
-        let entry = GuidEntry::new(&self.data[self.pos..end]);
+        let entry = GuidEntry::new(self.data.get(self.pos..end)?);
         self.pos = end;
         Some(entry)
     }
@@ -241,19 +241,19 @@ impl<'a> Iterator for NameIter<'a> {
             return None;
         }
         let hreftype = read_i32_le(self.data, self.pos)?;
-        let next_hash = read_i32_le(self.data, self.pos + 4)?;
-        let namelen = *self.data.get(self.pos + 8)? as usize;
-        let flags = *self.data.get(self.pos + 9)?;
-        let hashcode = read_u16_le(self.data, self.pos + 10)?;
+        let next_hash = read_i32_le(self.data, self.pos.checked_add(4)?)?;
+        let namelen = *self.data.get(self.pos.checked_add(8)?)? as usize;
+        let flags = *self.data.get(self.pos.checked_add(9)?)?;
+        let hashcode = read_u16_le(self.data, self.pos.checked_add(10)?)?;
         let name_start = header_end;
         let name_end = name_start.checked_add(namelen)?;
         if name_end > self.data.len() {
             return None;
         }
-        let offset = self.pos - self.seg_start;
+        let offset = self.pos.checked_sub(self.seg_start)?;
         let name = std::str::from_utf8(self.data.get(name_start..name_end)?).ok()?;
         // Advance past name + padding to 4-byte alignment
-        let padded = (namelen + 3) & !3;
+        let padded = namelen.checked_add(3)? & !3;
         self.pos = name_start.checked_add(padded)?;
         Some(NameEntry::new(
             offset, name, hreftype, next_hash, flags, hashcode,
@@ -294,7 +294,7 @@ impl<'a> Iterator for ImplTypeIter<'a> {
         if end > self.data.len() {
             return None;
         }
-        let rec = RefRecord::new(&self.data[abs..end]);
+        let rec = RefRecord::new(self.data.get(abs..end)?);
         self.next_offset = rec.onext();
         Some(rec)
     }
@@ -322,7 +322,7 @@ impl<'a> Iterator for ImpInfoIter<'a> {
         if end > self.end || end > self.data.len() {
             return None;
         }
-        let entry = ImpInfo::new(&self.data[self.pos..end]);
+        let entry = ImpInfo::new(self.data.get(self.pos..end)?);
         self.pos = end;
         Some(entry)
     }
@@ -352,15 +352,15 @@ impl<'a> Iterator for ImpFileIter<'a> {
         if self.pos.checked_add(ImpFile::HEADER_SIZE)? > self.end {
             return None;
         }
-        let size_field = read_u16_le(self.data, self.pos + 0x0C)?;
+        let size_field = read_u16_le(self.data, self.pos.checked_add(0x0C)?)?;
         let name_len = (size_field >> 2) as usize;
         let unpadded = ImpFile::HEADER_SIZE + name_len;
-        let entry_size = (unpadded + 3) & !3;
+        let entry_size = unpadded.checked_add(3)? & !3;
         let end = self.pos.checked_add(entry_size)?;
         if end > self.end || end > self.data.len() {
             return None;
         }
-        let entry = ImpFile::new(&self.data[self.pos..end]);
+        let entry = ImpFile::new(self.data.get(self.pos..end)?);
         self.pos = end;
         Some(entry)
     }
@@ -399,7 +399,7 @@ impl<'a> Iterator for CustDataIter<'a> {
         if end > self.data.len() {
             return None;
         }
-        let entry = CustDataEntry::new(&self.data[abs..end]);
+        let entry = CustDataEntry::new(self.data.get(abs..end)?);
         self.next_offset = entry.next();
         Some(entry)
     }

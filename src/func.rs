@@ -7,12 +7,13 @@
 //! [Info: u32] [DataType: i32] [Flags: u32] [VtableOff: i16] [FuncDescSize: i16]
 //! [FKCCIC: u32] [NrArgs: i16] [NrOArgs: i16]
 //! [optional attrs 0..N as i32]
-//! [per-arg custom data offsets, if FKCCIC bit 12 set]
+//! [default-value offsets, nrargs * 4 bytes, if FKCCIC bit 12 set]
 //! [ParameterInfo entries, nrargs * 12 bytes]
 //! ```
 //!
 //! The optional attributes (in order) are: help context, help string offset,
-//! oEntry/DISPID, name offset, help string context, and custom data offset.
+//! oEntry, two reserved words, help string context, custom data offset, and
+//! one custom data offset per argument. A record holds as many as fit.
 
 use crate::{
     ParameterInfo,
@@ -133,43 +134,82 @@ impl<'a> FuncRecord<'a> {
         read_i16_le(self.bytes, 0x16).unwrap_or(0)
     }
 
-    /// Number of standard optional-attribute DWORDs between the base
-    /// fixed fields and the parameter array.
+    /// Whether the record carries a default-value array (bit 12 of
+    /// [`fkccic`](Self::fkccic)).
+    #[inline]
+    pub fn has_default_values(&self) -> bool {
+        self.fkccic() & 0x1000 != 0
+    }
+
+    /// The `OffsValue` of parameter `index`'s default value, for
+    /// [`TypeLib::const_value`](crate::TypeLib::const_value).
     ///
-    /// The record layout after `BASE_SIZE` is:
+    /// When [`has_default_values`](Self::has_default_values) is set, an array
+    /// of one `OffsValue` per parameter lies directly before the parameter
+    /// records at the end of the record. Only a parameter whose
+    /// `PARAMFLAG_FHASDEFAULT` (0x20) is set has a meaningful entry.
+    ///
+    /// Returns `None` when the record has no such array or `index` is out of
+    /// range.
+    pub fn default_value_offset(&self, index: usize) -> Option<i32> {
+        let nrargs = usize::try_from(self.nrargs()).ok()?;
+        if !self.has_default_values() || index >= nrargs {
+            return None;
+        }
+        let params = nrargs.checked_mul(crate::ParameterInfo::SIZE)?;
+        let defaults = self
+            .bytes
+            .len()
+            .checked_sub(params)?
+            .checked_sub(nrargs.checked_mul(4)?)?;
+        read_i32_le(self.bytes, defaults.checked_add(index.checked_mul(4)?)?)
+    }
+
+    /// Number of optional attribute DWORDs between the base fixed fields and
+    /// the default-value and parameter arrays.
+    ///
+    /// The record layout after `BASE_SIZE`, as Wine's `MSFT_FuncRecord`
+    /// states it, is:
     ///
     /// ```text
-    /// [standard attrs: 0..6 DWORDs] [arg cust data: nrargs DWORDs if bit 12]
+    /// [attributes: HelpContext, oHelpString, oEntry, res9, resA,
+    ///  HelpStringContext, oCustData, oArgCustData[nrargs]; as many as fit]
+    /// [default values: nrargs DWORDs, if FKCCIC bit 12]
     /// [ParameterInfo: nrargs * 12 bytes]
     /// ```
     ///
-    /// This method returns only the count of standard attribute DWORDs
-    /// (up to 6), excluding per-argument custom data.
+    /// The count covers every attribute present, the per-argument custom
+    /// data included.
     fn nrattribs(&self) -> usize {
         let size = self.record_size();
         let nrargs = self.nrargs().max(0) as usize;
-        let params_size = nrargs * ParameterInfo::SIZE;
-        let arg_cust_size = if self.has_arg_cust_data() {
-            nrargs * 4
+        let params_size = nrargs.saturating_mul(ParameterInfo::SIZE);
+        let defaults_size = if self.has_default_values() {
+            nrargs.saturating_mul(4)
         } else {
             0
         };
         size.saturating_sub(Self::BASE_SIZE)
             .saturating_sub(params_size)
-            .saturating_sub(arg_cust_size)
+            .saturating_sub(defaults_size)
             / 4
     }
 
-    /// Whether this function has custom data (FKCCIC bit 7).
+    /// Whether this function has custom data (FKCCIC bit 7): its own at
+    /// [`cust_data_offset`](Self::cust_data_offset), and its parameters' at
+    /// [`arg_cust_data_offset`](Self::arg_cust_data_offset) where the record
+    /// holds them.
     #[inline]
     pub fn has_cust_data(&self) -> bool {
         self.fkccic() & 0x80 != 0
     }
 
-    /// Whether this function has per-argument custom data (FKCCIC bit 12).
+    /// Whether this function's record holds per-argument custom data: it has
+    /// custom data ([`has_cust_data`](Self::has_cust_data)) and attributes
+    /// past `oCustData`.
     #[inline]
     pub fn has_arg_cust_data(&self) -> bool {
-        self.fkccic() & 0x1000 != 0
+        self.has_cust_data() && self.nrattribs() > 7
     }
 
     /// Help context (attribute 0, offset 0x18).
@@ -194,10 +234,10 @@ impl<'a> FuncRecord<'a> {
         }
     }
 
-    /// `oEntry` / DISPID (attribute 2, offset 0x20).
-    ///
-    /// For `DISPATCH` interfaces this is the DISPID.
-    /// For `MODULE` types this is a name offset or ordinal.
+    /// `oEntry` (attribute 2, offset 0x20): for a function of a `MODULE`, the
+    /// DLL entry point, a string-table offset or, when FKCCIC bit 13 is set,
+    /// an ordinal. A function's DISPID is not here: it is its MEMBERID
+    /// ([`TypeLib::func_memid`](crate::TypeLib::func_memid)).
     ///
     /// Returns `None` if the record is too short to contain this field.
     pub fn oentry(&self) -> Option<i32> {
@@ -208,14 +248,11 @@ impl<'a> FuncRecord<'a> {
         }
     }
 
-    /// Function name offset in the name table (attribute 3, offset 0x24).
-    ///
-    /// Note: in practice, function names are read from the auxiliary
-    /// arrays via [`TypeLib::func_name`](crate::TypeLib::func_name)
-    /// rather than from this record attribute.
+    /// The reserved attribute 3 (offset 0x24), -1 in every library Wine
+    /// has seen.
     ///
     /// Returns `None` if the record is too short to contain this field.
-    pub fn name_offset(&self) -> Option<i32> {
+    pub fn res9(&self) -> Option<i32> {
         if self.nrattribs() > 3 {
             read_i32_le(self.bytes, 0x24)
         } else {
@@ -223,10 +260,11 @@ impl<'a> FuncRecord<'a> {
         }
     }
 
-    /// Help string context (attribute 4, offset 0x28).
+    /// The reserved attribute 4 (offset 0x28), -1 in every library Wine
+    /// has seen.
     ///
     /// Returns `None` if the record is too short to contain this field.
-    pub fn helpstringcontext(&self) -> Option<i32> {
+    pub fn res_a(&self) -> Option<i32> {
         if self.nrattribs() > 4 {
             read_i32_le(self.bytes, 0x28)
         } else {
@@ -234,13 +272,10 @@ impl<'a> FuncRecord<'a> {
         }
     }
 
-    /// Offset into the CDGuids directory for this function's custom data
-    /// (attribute 5, offset 0x2C).
-    ///
-    /// Only meaningful when [`has_cust_data`](Self::has_cust_data) returns `true`.
+    /// Help string context (attribute 5, offset 0x2C).
     ///
     /// Returns `None` if the record is too short to contain this field.
-    pub fn cust_data_offset(&self) -> Option<i32> {
+    pub fn helpstringcontext(&self) -> Option<i32> {
         if self.nrattribs() > 5 {
             read_i32_le(self.bytes, 0x2C)
         } else {
@@ -248,21 +283,34 @@ impl<'a> FuncRecord<'a> {
         }
     }
 
-    /// Returns the custom data offset for argument `arg_index`.
+    /// Offset into the CDGuids directory for this function's custom data
+    /// (attribute 6, offset 0x30).
     ///
-    /// The per-argument custom data array follows all optional attributes
-    /// (when FKCCIC bit 12 is set). Returns `None` if the function has
-    /// no per-argument custom data or the index is out of bounds.
+    /// Returns `None` unless the function has custom data
+    /// ([`has_cust_data`](Self::has_cust_data)) and the record holds the
+    /// field.
+    pub fn cust_data_offset(&self) -> Option<i32> {
+        if self.has_cust_data() && self.nrattribs() > 6 {
+            read_i32_le(self.bytes, 0x30)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the custom data offset for argument `arg_index`: attribute
+    /// `7 + arg_index`, after `oCustData`.
+    ///
+    /// Returns `None` if the function has no per-argument custom data or the
+    /// record does not hold the argument's entry.
     pub fn arg_cust_data_offset(&self, arg_index: usize) -> Option<i32> {
-        if !self.has_arg_cust_data() {
-            return None;
-        }
         let nrargs = self.nrargs().max(0) as usize;
-        if arg_index >= nrargs {
+        let attribute = arg_index.checked_add(7)?;
+        if !self.has_cust_data() || arg_index >= nrargs || attribute >= self.nrattribs() {
             return None;
         }
-        let attrs = self.nrattribs();
-        let offset = Self::BASE_SIZE + attrs * 4 + arg_index * 4;
-        read_i32_le(self.bytes, offset)
+        read_i32_le(
+            self.bytes,
+            attribute.checked_mul(4)?.checked_add(Self::BASE_SIZE)?,
+        )
     }
 }

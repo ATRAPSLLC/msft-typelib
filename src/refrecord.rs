@@ -3,7 +3,7 @@
 //! The reference table (segment 3) stores the list of interfaces that a
 //! coclass implements.  Entries form a singly-linked list via the
 //! [`onext`](RefRecord::onext) field; the chain starts at
-//! [`TypeInfoEntry::res2`](crate::TypeInfoEntry::res2).  Each entry
+//! [`TypeInfoEntry::datatype1`](crate::TypeInfoEntry::datatype1).  Each entry
 //! carries an `hreftype` identifying the implemented interface and
 //! `IMPLTYPEFLAG_*` bits (default, source, restricted).
 

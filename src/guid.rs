@@ -58,21 +58,21 @@ impl<'a> Guid<'a> {
 
 impl fmt::Display for Guid<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let d4 = self.data4();
+        let [a, b, c, d, e, g, h, i] = <[u8; 8]>::try_from(self.data4()).unwrap_or([0; 8]);
         write!(
             f,
             "{{{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}",
             self.data1(),
             self.data2(),
             self.data3(),
-            d4[0],
-            d4[1],
-            d4[2],
-            d4[3],
-            d4[4],
-            d4[5],
-            d4[6],
-            d4[7]
+            a,
+            b,
+            c,
+            d,
+            e,
+            g,
+            h,
+            i
         )
     }
 }
